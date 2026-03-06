@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\InspectionController;
 |--------------------------------------------------------------------------
 */
 
+// ln -s /home/u516139464/domains/cekmobil.online/public_html/project-management/management/storage/app/public /home/u516139464/domains/cekmobil.online/public_html/project-management/management/public/storage
 Route::prefix('inspection')->group(function () {
 
     Route::get('/details/{inspection}', [InspectionController::class, 'show']);
