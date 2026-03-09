@@ -440,23 +440,35 @@ class FormInspectionController extends Controller
 
     public function uploadImages(Request $request)
     {
-        // Log::info('=== UPLOAD IMAGE START ===');
-        // Log::info('Request Data:', $request->all());
+        Log::info('=== UPLOAD IMAGE START ===');
+        Log::info('Request Data:', $request->all());
 
         try {
+
+                // ✅ Harus di sini — SEBELUM validate
+        $request->merge([
+            'inspection_item_id' => ($request->inspection_item_id == 0 || $request->inspection_item_id === '')
+                ? null : $request->inspection_item_id,
+            'item_id' => ($request->item_id == 0 || $request->item_id === '')
+                ? null : $request->item_id,
+        ]);
+
             $request->validate([
                 'inspection_id' => 'required|exists:inspections,id',
-                'inspection_item_id' => 'required|exists:inspection_items,id',
-                'item_id' => 'required|exists:section_items,id',
+                'inspection_item_id' => 'nullable|exists:inspection_items,id',
+                'item_id' => 'nullable|exists:section_items,id',
                 'images' => 'required',
                 'selected_option' => 'nullable|array'
             ]);
 
-            // Log::info('Validation passed');
+            Log::info('Validation passed');
 
-            $sectionItem = SectionItem::findOrFail($request->item_id);
-            // Log::info('SectionItem found:', ['id' => $sectionItem->id, 'input_type' => $sectionItem->input_type]);
+            // $sectionItem = SectionItem::findOrFail($request->item_id);
+        $sectionItem = $request->item_id
+    ? SectionItem::find($request->item_id)
+    : null;
 
+Log::info('SectionItem:', ['found' => $sectionItem ? $sectionItem->id : 'null (foto bebas)']);
             // Resolve settings berdasarkan input_type dan selected_option
             $selectedOptions = $request->input('selected_option_value', []);
 
@@ -464,23 +476,34 @@ class FormInspectionController extends Controller
                 $selectedOptions = array_map('trim', explode(',', $selectedOptions));
             }
 
-            $settings = $this->resolveImageSettings(
-                $sectionItem,
-                $selectedOptions
-            );
+            // $settings = $this->resolveImageSettings(
+            //     $sectionItem,
+            //     $selectedOptions
+            // );
 
-            // Log::info('Resolved settings:', $settings);
+            $settings = $sectionItem
+                ? $this->resolveImageSettings($sectionItem, $selectedOptions)
+                : [
+                        'max_size'            => 5120, // default 5MB
+                        'max_files'           => 10,   // foto bebas boleh banyak
+                        'allowed_mimes'       => ['jpg', 'jpeg', 'png'],
+                        'compression_quality' => 60,
+                        'max_width'           => null,
+                        'max_height'          => null,
+                    ];
+
+            Log::info('Resolved settings:', $settings);
 
             // Validasi awal sebelum kompresi
             $files = is_array($request->file('images'))
                 ? $request->file('images')
                 : [$request->file('images')];
 
-            // Log::info('Total files:', ['count' => count($files)]);
+            Log::info('Total files:', ['count' => count($files)]);
 
             // Validasi jumlah file
             if (count($files) > $settings['max_files']) {
-                // Log::warning('File count exceeded');
+                Log::warning('File count exceeded');
                 return response()->json([
                     'success' => false,
                     'message' => "Maximum {$settings['max_files']} file(s) allowed"
@@ -491,12 +514,12 @@ class FormInspectionController extends Controller
             $errors = [];
 
             foreach ($files as $index => $file) {
-                // Log::info("Processing file index {$index}");
+                Log::info("Processing file index {$index}");
 
                 try {
                     // Validasi format file
                     $extension = strtolower($file->getClientOriginalExtension());
-                    // Log::info("Extension: {$extension}");
+                    Log::info("Extension: {$extension}");
 
                     if (!empty($settings['allowed_mimes']) && 
                         !in_array($extension, $settings['allowed_mimes'])) {
@@ -505,7 +528,7 @@ class FormInspectionController extends Controller
 
                     // Validasi ukuran file SEBELUM kompresi
                     $fileSizeKB = round($file->getSize() / 1024, 2);
-                    // Log::info('Original file size (KB):', ['size_kb' => $fileSizeKB]);
+                    Log::info('Original file size (KB):', ['size_kb' => $fileSizeKB]);
 
                     if ($file->getSize() > ($settings['max_size'] * 1024)) {
                         throw new \Exception("Ukuran file terlalu besar. Maksimal {$settings['max_size']}KB");
@@ -514,16 +537,16 @@ class FormInspectionController extends Controller
                     // Proses kompresi jika > 1.2MB
                     $processedFile = $file;
                     if ($file->getSize() > (1.2 * 1024 * 1024)) {
-                        // Log::info('File > 1.2MB, compressing...');
+                        Log::info('File > 1.2MB, compressing...');
                         
                         $processedFile = $this->compressImage(
                             $file,
                             $settings
                         );
 
-                        // Log::info('After compress size (KB):', [
-                        //     'size_kb' => round($processedFile->getSize() / 1024, 2)
-                        // ]);
+                        Log::info('After compress size (KB):', [
+                            'size_kb' => round($processedFile->getSize() / 1024, 2)
+                        ]);
                     }
 
                     // Simpan file
@@ -534,20 +557,21 @@ class FormInspectionController extends Controller
                         'public'
                     );
 
-                    // Log::info('Stored at:', ['path' => $path]);
+                    Log::info('Stored at:', ['path' => $path]);
 
                     // Simpan ke database
                     $image = InspectionImage::create([
                         'inspection_id' => $request->inspection_id,
-                        'inspection_item_id' => $request->inspection_item_id,
+                        'inspection_item_id' => $request->inspection_item_id ?: null,
                         'image_path' => $path,
                         'caption' => null,
                     ]);
 
-                    // Log::info('DB Inserted:', ['image_id' => $image->id]);
+                    Log::info('DB Inserted:', ['image_id' => $image->id]);
 
                     $uploadedImages[] = [
                         'id' => $image->id,
+                        'inspection_item_id' => $image->inspection_item_id,
                         'image_url' => $image->image_url
                     ];
 
@@ -557,7 +581,7 @@ class FormInspectionController extends Controller
                 }
             }
 
-            // Log::info('=== UPLOAD IMAGE END ===');
+            Log::info('=== UPLOAD IMAGE END ===');
 
             if (empty($uploadedImages)) {
                 return response()->json([
@@ -573,7 +597,7 @@ class FormInspectionController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            // Log::error('FATAL ERROR: ' . $e->getMessage());
+            Log::error('FATAL ERROR: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -597,9 +621,9 @@ class FormInspectionController extends Controller
         $settingsJson = $sectionItem->settings ?? [];
         
         // Log untuk debug
-        // Log::info('Raw settings from DB:', $settingsJson);
-        // Log::info('Input type:', ['type' => $sectionItem->input_type]);
-        // Log::info('Selected options (raw):', $selectedOptions);
+        Log::info('Raw settings from DB:', $settingsJson);
+        Log::info('Input type:', ['type' => $sectionItem->input_type]);
+        Log::info('Selected options (raw):', $selectedOptions);
 
         // Process selected options - karena bisa berupa string "NOT OK,Repaint" atau array
         $processedSelectedOptions = [];
@@ -615,7 +639,7 @@ class FormInspectionController extends Controller
             }
         }
         
-        // Log::info('Processed selected options:', $processedSelectedOptions);
+        Log::info('Processed selected options:', $processedSelectedOptions);
 
         /*
         |--------------------------------------------------------------------------
@@ -660,22 +684,22 @@ class FormInspectionController extends Controller
                 $optionValue = $option['value'] ?? null;
                 
                 // Log untuk trace
-                // Log::info('Comparing:', [
-                //     'selected' => $selectedValue,
-                //     'option_value' => $optionValue,
-                //     'match' => ($optionValue == $selectedValue) ? 'YES' : 'NO'
-                // ]);
+                Log::info('Comparing:', [
+                    'selected' => $selectedValue,
+                    'option_value' => $optionValue,
+                    'match' => ($optionValue == $selectedValue) ? 'YES' : 'NO'
+                ]);
                 
                 if ($optionValue == $selectedValue) {
                     
                     // Ambil settings dari option
                     $optionSettings = $option['settings'] ?? [];
                     
-                    // Log::info('Found matching option:', [
-                    //     'selected' => $selectedValue,
-                    //     'option_value' => $optionValue,
-                    //     'settings' => $optionSettings
-                    // ]);
+                    Log::info('Found matching option:', [
+                        'selected' => $selectedValue,
+                        'option_value' => $optionValue,
+                        'settings' => $optionSettings
+                    ]);
                     
                     $matchedSettings[] = $optionSettings;
                     break; // Keluar dari loop options setelah menemukan yang cocok
@@ -683,10 +707,10 @@ class FormInspectionController extends Controller
             }
         }
 
-        // Log::info('Matched settings count:', ['count' => count($matchedSettings)]);
+        Log::info('Matched settings count:', ['count' => count($matchedSettings)]);
 
         if (empty($matchedSettings)) {
-            // Log::warning('No matching settings found, using default');
+            Log::warning('No matching settings found, using default');
             return $default;
         }
 
@@ -704,7 +728,7 @@ class FormInspectionController extends Controller
                 $settingMaxSize = (int)$setting['max_size'];
                 if ($settingMaxSize > $maxSize) {
                     $maxSize = $settingMaxSize;
-                    // Log::info("Max size from setting: {$settingMaxSize}");
+                    Log::info("Max size from setting: {$settingMaxSize}");
                 }
             }
             
@@ -713,7 +737,7 @@ class FormInspectionController extends Controller
                 $settingMaxFiles = (int)$setting['max_files'];
                 if ($settingMaxFiles > $maxFiles) {
                     $maxFiles = $settingMaxFiles;
-                    // Log::info("Max files from setting: {$settingMaxFiles}");
+                    Log::info("Max files from setting: {$settingMaxFiles}");
                 }
             }
             
@@ -722,7 +746,7 @@ class FormInspectionController extends Controller
                 $settingQuality = (int)$setting['compression_quality'];
                 if ($settingQuality > $compressionQuality) {
                     $compressionQuality = $settingQuality;
-                    // Log::info("Compression quality from setting: {$settingQuality}");
+                    Log::info("Compression quality from setting: {$settingQuality}");
                 }
             }
             
@@ -731,7 +755,7 @@ class FormInspectionController extends Controller
                 $settingWidth = (int)$setting['max_width'];
                 if ($maxWidth === null || $settingWidth > $maxWidth) {
                     $maxWidth = $settingWidth;
-                    // Log::info("Max width from setting: {$settingWidth}");
+                    Log::info("Max width from setting: {$settingWidth}");
                 }
             }
             
@@ -740,7 +764,7 @@ class FormInspectionController extends Controller
                 $settingHeight = (int)$setting['max_height'];
                 if ($maxHeight === null || $settingHeight > $maxHeight) {
                     $maxHeight = $settingHeight;
-                    // Log::info("Max height from setting: {$settingHeight}");
+                    Log::info("Max height from setting: {$settingHeight}");
                 }
             }
             
@@ -751,7 +775,7 @@ class FormInspectionController extends Controller
                     : (is_string($setting['allowed_mimes']) ? explode(',', $setting['allowed_mimes']) : []);
                 
                 $allowedMimes = array_merge($allowedMimes, $mimes);
-                // Log::info("Allowed mimes from setting:", $mimes);
+                Log::info("Allowed mimes from setting:", $mimes);
             }
         }
 
@@ -992,6 +1016,47 @@ class FormInspectionController extends Controller
         }
     }
 
+
+    /**
+     * Ambil semua gambar yang belum diassign ke item manapun (foto bebas).
+     * Gambar bebas = inspection_item_id IS NULL di tabel inspection_images.
+     *
+     * GET /api/form-inspection/{inspectionId}/unassigned-images
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "data": [
+     *     { "id": 1, "image_url": "http://...", "caption": null, "created_at": "..." },
+     *     ...
+     *   ]
+     * }
+     */
+    public function getUnassignedImages(int $inspectionId)
+    {
+        // Pastikan inspection ada dan milik user yang sedang login
+        $inspection = Inspection::where('id', $inspectionId)
+            ->firstOrFail();
+
+        // Ambil gambar yang inspection_item_id = NULL
+        $images = InspectionImage::where('inspection_id', $inspectionId)
+            ->whereNull('inspection_item_id')   // ← harus whereNull, bukan where(..., null)
+            ->orderBy('created_at', 'asc')
+            ->get()
+            ->map(fn($img) => [
+                'id'         => $img->id,
+                'image_url'  => asset('storage/' . $img->image_path),
+                'caption'    => $img->caption,
+                'created_at' => $img->created_at?->toISOString(),
+            ])
+            ->values()
+            ->toArray();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $images,   // selalu array, tidak pernah null
+        ]);
+    }
 
 
     // ─────────────────────────────────────────────────────────────
