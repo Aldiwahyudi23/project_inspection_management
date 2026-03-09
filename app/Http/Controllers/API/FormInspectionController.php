@@ -283,16 +283,42 @@ class FormInspectionController extends Controller
     /**
      * Get item result
      */
-private function getItemResult($inspectionId, $itemId, $inputType = null)
-{
-    $result = InspectionResult::where('inspection_id', $inspectionId)
-        ->where('inspection_item_id', $itemId)
-        ->first();
+/**
+     * Ambil current_result untuk satu item inspeksi.
+     *
+     * Format return (flat) sesuai formValues frontend:
+     *
+     * [A] text/textarea/number/currency/percentage/date/datetime/time
+     *     → string | number | null
+     *     Contoh: "Baret halus" | 12345
+     *
+     * [B] image (tanpa show_option)
+     *     → [{id, image_url, caption}] | null
+     *
+     * [C] radio / select / checkbox
+     *     → { status, note, image, damage_ids }
+     *       status: string (radio/select) | string[] (checkbox)
+     *
+     * [D] image + show_option
+     *     → { image, status, note, damage_ids }
+     *       image: [{id, image_url, caption}]
+     *       status: string | null (opsi yang dipilih)
+     */
+    private function getItemResult($inspectionId, $itemId, $inputType = null)
+    {
+        // ── Helper: decode status yang mungkin tersimpan sebagai JSON string ──
+        $decodeStatus = function ($raw) {
+            if ($raw === null) return null;
+            if (is_array($raw)) return $raw;
+            if (is_string($raw) && str_starts_with(trim($raw), '[')) {
+                $decoded = json_decode($raw, true);
+                if (json_last_error() === JSON_ERROR_NONE) return $decoded;
+            }
+            return $raw === '' ? null : (string) $raw;
+        };
 
-    // ── Khusus input_type image tanpa show_option ──
-    // Data tidak disimpan di result, langsung ambil dari inspection_images
-    if ($inputType === 'image') {
-        $images = InspectionImage::where('inspection_id', $inspectionId)
+        // ── Helper: ambil gambar milik item ──
+        $getImages = fn() => InspectionImage::where('inspection_id', $inspectionId)
             ->where('inspection_item_id', $itemId)
             ->get()
             ->map(fn($img) => [
@@ -303,93 +329,63 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             ->values()
             ->toArray();
 
-        // Tidak ada result dan tidak ada gambar → null
-        if (!$result && empty($images)) return null;
+        // ── [B] input_type = image ────────────────────────────────
+        if ($inputType === 'image') {
+            $images = $getImages();
+            $result = InspectionResult::where('inspection_id', $inspectionId)
+                ->where('inspection_item_id', $itemId)
+                ->first();
 
-        // Tidak ada result tapi ada gambar → image langsung (tanpa show_option)
-        if (!$result) {
-            return empty($images) ? null : $images;
+            // Tidak ada result dan tidak ada gambar → null
+            if (!$result && empty($images)) return null;
+
+            // Tidak ada result tapi ada gambar → image biasa (tanpa show_option)
+            if (!$result) return $images;
+
+            // Ada result → berarti punya show_option
+            // Format flat [D]: { image, status, note, damage_ids }
+            $extraData = is_array($result->extra_data)
+                ? $result->extra_data
+                : (json_decode($result->extra_data, true) ?? []);
+
+            return [
+                'image'      => $images,
+                'status'     => $decodeStatus($result->status),
+                'note'       => $result->note,
+                'damage_ids' => $extraData['damage_ids'] ?? [],
+            ];
         }
 
-        // Ada result → berarti punya show_option (status = selectedOption)
-        $extraData = is_array($result->extra_data)
-            ? $result->extra_data
-            : (json_decode($result->extra_data, true) ?? []);
+        // ── Input type lain: result wajib ada ────────────────────
+        $result = InspectionResult::where('inspection_id', $inspectionId)
+            ->where('inspection_item_id', $itemId)
+            ->first();
 
-        $damageIds = $extraData['damage_ids'] ?? [];
+        if (!$result) return null;
 
-        $status = $result->status;
-        if (is_string($status) && str_starts_with(trim($status), '[')) {
-            $decoded = json_decode($status, true);
-            if (json_last_error() === JSON_ERROR_NONE) $status = $decoded;
+        // ── [A] Nilai langsung (text/number/dll) ──────────────────
+        if (in_array($inputType, ['text', 'textarea', 'number', 'currency', 'percentage', 'date', 'datetime', 'time'])) {
+            return $result->note;
         }
 
-        return [
-            'main' => $images,
-            'imageNested' => [
-                'selectedOption' => $status,
-                'nested' => [
-                    'aggregated' => [
-                        'textarea'   => $result->note,
-                        'damage_ids' => $damageIds,
-                    ]
-                ]
-            ]
-        ];
+        // ── [C] radio / select / checkbox ─────────────────────────
+        // Format flat: { status, note, image, damage_ids }
+        if (in_array($inputType, ['radio', 'select', 'checkbox'])) {
+            $images    = $getImages();
+            $extraData = is_array($result->extra_data)
+                ? $result->extra_data
+                : (json_decode($result->extra_data, true) ?? []);
+
+            return [
+                'status'     => $decodeStatus($result->status),
+                'note'       => $result->note,
+                'image'      => !empty($images) ? $images : null,
+                'damage_ids' => $extraData['damage_ids'] ?? [],
+            ];
+        }
+
+        return null;
     }
-
-    // ── Untuk input_type lain, result wajib ada ──
-    if (!$result) return null;
-
-    $images = InspectionImage::where('inspection_id', $inspectionId)
-        ->where('inspection_item_id', $itemId)
-        ->get()
-        ->map(fn($img) => [
-            'id'        => $img->id,
-            'image_url' => asset('storage/' . $img->image_path),
-            'caption'   => $img->caption,
-        ])
-        ->values()
-        ->toArray();
-
-    $extraData = is_array($result->extra_data)
-        ? $result->extra_data
-        : (json_decode($result->extra_data, true) ?? []);
-
-    $damageIds = $extraData['damage_ids'] ?? [];
-
-    $status = $result->status;
-    if (is_string($status) && str_starts_with(trim($status), '[')) {
-        $decoded = json_decode($status, true);
-        if (json_last_error() === JSON_ERROR_NONE) $status = $decoded;
-    }
-
-    // text/textarea/number/currency/percentage
-    if (in_array($inputType, ['text', 'textarea', 'number', 'currency', 'percentage', 'date', 'datetime', 'time'])) {
-        return $result->note;
-    }
-
-    // radio/select tanpa nested
-    if (in_array($inputType, ['radio', 'select', 'checkbox']) && empty($images) && $result->note === null && empty($damageIds)) {
-        return ['main' => $status];
-    }
-
-    // radio/select/checkbox dengan nested
-    if (in_array($inputType, ['radio', 'select', 'checkbox'])) {
-        return [
-            'main' => $status,
-            'nested' => [
-                'aggregated' => [
-                    'textarea'   => $result->note,
-                    'image'      => !empty($images) ? $images : null,
-                    'damage_ids' => $damageIds,
-                ]
-            ]
-        ];
-    }
-
-    return null;
-}
 
     // ========================= Untuk menghandle Imga di Form Inspection=====================================
     /**
@@ -444,8 +440,8 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
 
     public function uploadImages(Request $request)
     {
-        Log::info('=== UPLOAD IMAGE START ===');
-        Log::info('Request Data:', $request->all());
+        // Log::info('=== UPLOAD IMAGE START ===');
+        // Log::info('Request Data:', $request->all());
 
         try {
             $request->validate([
@@ -456,10 +452,10 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 'selected_option' => 'nullable|array'
             ]);
 
-            Log::info('Validation passed');
+            // Log::info('Validation passed');
 
             $sectionItem = SectionItem::findOrFail($request->item_id);
-            Log::info('SectionItem found:', ['id' => $sectionItem->id, 'input_type' => $sectionItem->input_type]);
+            // Log::info('SectionItem found:', ['id' => $sectionItem->id, 'input_type' => $sectionItem->input_type]);
 
             // Resolve settings berdasarkan input_type dan selected_option
             $selectedOptions = $request->input('selected_option_value', []);
@@ -473,18 +469,18 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $selectedOptions
             );
 
-            Log::info('Resolved settings:', $settings);
+            // Log::info('Resolved settings:', $settings);
 
             // Validasi awal sebelum kompresi
             $files = is_array($request->file('images'))
                 ? $request->file('images')
                 : [$request->file('images')];
 
-            Log::info('Total files:', ['count' => count($files)]);
+            // Log::info('Total files:', ['count' => count($files)]);
 
             // Validasi jumlah file
             if (count($files) > $settings['max_files']) {
-                Log::warning('File count exceeded');
+                // Log::warning('File count exceeded');
                 return response()->json([
                     'success' => false,
                     'message' => "Maximum {$settings['max_files']} file(s) allowed"
@@ -495,12 +491,12 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             $errors = [];
 
             foreach ($files as $index => $file) {
-                Log::info("Processing file index {$index}");
+                // Log::info("Processing file index {$index}");
 
                 try {
                     // Validasi format file
                     $extension = strtolower($file->getClientOriginalExtension());
-                    Log::info("Extension: {$extension}");
+                    // Log::info("Extension: {$extension}");
 
                     if (!empty($settings['allowed_mimes']) && 
                         !in_array($extension, $settings['allowed_mimes'])) {
@@ -509,7 +505,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
 
                     // Validasi ukuran file SEBELUM kompresi
                     $fileSizeKB = round($file->getSize() / 1024, 2);
-                    Log::info('Original file size (KB):', ['size_kb' => $fileSizeKB]);
+                    // Log::info('Original file size (KB):', ['size_kb' => $fileSizeKB]);
 
                     if ($file->getSize() > ($settings['max_size'] * 1024)) {
                         throw new \Exception("Ukuran file terlalu besar. Maksimal {$settings['max_size']}KB");
@@ -518,16 +514,16 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                     // Proses kompresi jika > 1.2MB
                     $processedFile = $file;
                     if ($file->getSize() > (1.2 * 1024 * 1024)) {
-                        Log::info('File > 1.2MB, compressing...');
+                        // Log::info('File > 1.2MB, compressing...');
                         
                         $processedFile = $this->compressImage(
                             $file,
                             $settings
                         );
 
-                        Log::info('After compress size (KB):', [
-                            'size_kb' => round($processedFile->getSize() / 1024, 2)
-                        ]);
+                        // Log::info('After compress size (KB):', [
+                        //     'size_kb' => round($processedFile->getSize() / 1024, 2)
+                        // ]);
                     }
 
                     // Simpan file
@@ -538,7 +534,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                         'public'
                     );
 
-                    Log::info('Stored at:', ['path' => $path]);
+                    // Log::info('Stored at:', ['path' => $path]);
 
                     // Simpan ke database
                     $image = InspectionImage::create([
@@ -548,7 +544,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                         'caption' => null,
                     ]);
 
-                    Log::info('DB Inserted:', ['image_id' => $image->id]);
+                    // Log::info('DB Inserted:', ['image_id' => $image->id]);
 
                     $uploadedImages[] = [
                         'id' => $image->id,
@@ -561,7 +557,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 }
             }
 
-            Log::info('=== UPLOAD IMAGE END ===');
+            // Log::info('=== UPLOAD IMAGE END ===');
 
             if (empty($uploadedImages)) {
                 return response()->json([
@@ -577,7 +573,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             ]);
 
         } catch (\Exception $e) {
-            Log::error('FATAL ERROR: ' . $e->getMessage());
+            // Log::error('FATAL ERROR: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -601,9 +597,9 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
         $settingsJson = $sectionItem->settings ?? [];
         
         // Log untuk debug
-        Log::info('Raw settings from DB:', $settingsJson);
-        Log::info('Input type:', ['type' => $sectionItem->input_type]);
-        Log::info('Selected options (raw):', $selectedOptions);
+        // Log::info('Raw settings from DB:', $settingsJson);
+        // Log::info('Input type:', ['type' => $sectionItem->input_type]);
+        // Log::info('Selected options (raw):', $selectedOptions);
 
         // Process selected options - karena bisa berupa string "NOT OK,Repaint" atau array
         $processedSelectedOptions = [];
@@ -619,7 +615,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             }
         }
         
-        Log::info('Processed selected options:', $processedSelectedOptions);
+        // Log::info('Processed selected options:', $processedSelectedOptions);
 
         /*
         |--------------------------------------------------------------------------
@@ -651,7 +647,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
         $options = $settingsJson['settings']['options'] ?? [];
         
         if (empty($options)) {
-            Log::warning('No options found in settings');
+            // Log::warning('No options found in settings');
             return $default;
         }
 
@@ -664,22 +660,22 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $optionValue = $option['value'] ?? null;
                 
                 // Log untuk trace
-                Log::info('Comparing:', [
-                    'selected' => $selectedValue,
-                    'option_value' => $optionValue,
-                    'match' => ($optionValue == $selectedValue) ? 'YES' : 'NO'
-                ]);
+                // Log::info('Comparing:', [
+                //     'selected' => $selectedValue,
+                //     'option_value' => $optionValue,
+                //     'match' => ($optionValue == $selectedValue) ? 'YES' : 'NO'
+                // ]);
                 
                 if ($optionValue == $selectedValue) {
                     
                     // Ambil settings dari option
                     $optionSettings = $option['settings'] ?? [];
                     
-                    Log::info('Found matching option:', [
-                        'selected' => $selectedValue,
-                        'option_value' => $optionValue,
-                        'settings' => $optionSettings
-                    ]);
+                    // Log::info('Found matching option:', [
+                    //     'selected' => $selectedValue,
+                    //     'option_value' => $optionValue,
+                    //     'settings' => $optionSettings
+                    // ]);
                     
                     $matchedSettings[] = $optionSettings;
                     break; // Keluar dari loop options setelah menemukan yang cocok
@@ -687,10 +683,10 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             }
         }
 
-        Log::info('Matched settings count:', ['count' => count($matchedSettings)]);
+        // Log::info('Matched settings count:', ['count' => count($matchedSettings)]);
 
         if (empty($matchedSettings)) {
-            Log::warning('No matching settings found, using default');
+            // Log::warning('No matching settings found, using default');
             return $default;
         }
 
@@ -708,7 +704,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $settingMaxSize = (int)$setting['max_size'];
                 if ($settingMaxSize > $maxSize) {
                     $maxSize = $settingMaxSize;
-                    Log::info("Max size from setting: {$settingMaxSize}");
+                    // Log::info("Max size from setting: {$settingMaxSize}");
                 }
             }
             
@@ -717,7 +713,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $settingMaxFiles = (int)$setting['max_files'];
                 if ($settingMaxFiles > $maxFiles) {
                     $maxFiles = $settingMaxFiles;
-                    Log::info("Max files from setting: {$settingMaxFiles}");
+                    // Log::info("Max files from setting: {$settingMaxFiles}");
                 }
             }
             
@@ -726,7 +722,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $settingQuality = (int)$setting['compression_quality'];
                 if ($settingQuality > $compressionQuality) {
                     $compressionQuality = $settingQuality;
-                    Log::info("Compression quality from setting: {$settingQuality}");
+                    // Log::info("Compression quality from setting: {$settingQuality}");
                 }
             }
             
@@ -735,7 +731,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $settingWidth = (int)$setting['max_width'];
                 if ($maxWidth === null || $settingWidth > $maxWidth) {
                     $maxWidth = $settingWidth;
-                    Log::info("Max width from setting: {$settingWidth}");
+                    // Log::info("Max width from setting: {$settingWidth}");
                 }
             }
             
@@ -744,7 +740,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                 $settingHeight = (int)$setting['max_height'];
                 if ($maxHeight === null || $settingHeight > $maxHeight) {
                     $maxHeight = $settingHeight;
-                    Log::info("Max height from setting: {$settingHeight}");
+                    // Log::info("Max height from setting: {$settingHeight}");
                 }
             }
             
@@ -755,7 +751,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
                     : (is_string($setting['allowed_mimes']) ? explode(',', $setting['allowed_mimes']) : []);
                 
                 $allowedMimes = array_merge($allowedMimes, $mimes);
-                Log::info("Allowed mimes from setting:", $mimes);
+                // Log::info("Allowed mimes from setting:", $mimes);
             }
         }
 
@@ -769,14 +765,14 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
         $allowedMimes = array_unique($allowedMimes);
 
         // Log hasil akhir
-        Log::info('Final resolved settings:', [
-            'max_size' => $maxSize,
-            'max_files' => $maxFiles,
-            'compression_quality' => $compressionQuality,
-            'max_width' => $maxWidth,
-            'max_height' => $maxHeight,
-            'allowed_mimes' => $allowedMimes
-        ]);
+        // Log::info('Final resolved settings:', [
+        //     'max_size' => $maxSize,
+        //     'max_files' => $maxFiles,
+        //     'compression_quality' => $compressionQuality,
+        //     'max_width' => $maxWidth,
+        //     'max_height' => $maxHeight,
+        //     'allowed_mimes' => $allowedMimes
+        // ]);
 
         return [
             'max_size' => $maxSize,
@@ -922,7 +918,7 @@ private function getItemResult($inspectionId, $itemId, $inputType = null)
             );
             
         } catch (\Exception $e) {
-            Log::error('Compression error: ' . $e->getMessage());
+            // Log::error('Compression error: ' . $e->getMessage());
             // Jika gagal kompres, return file asli
             return $file;
         }
