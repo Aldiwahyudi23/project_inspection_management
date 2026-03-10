@@ -27,6 +27,12 @@ Route::prefix('inspection')->group(function () {
     Route::delete('/{inspectionId}/items/{itemId}', [FormInspectionController::class, 'deleteItem']);
     // Get image Item Null
     Route::get('/inspection-images/unassigned/{inspectionId}', [FormInspectionController::class, 'getUnassignedImages']);  
+
+    // Update Inspection Item
+    Route::patch(
+        '/inspection-images/assign',
+        [FormInspectionController::class, 'assignImages']
+    );
     // Submit form with multiple items
     Route::post('/save-form', [FormInspectionController::class, 'saveForm']);
 

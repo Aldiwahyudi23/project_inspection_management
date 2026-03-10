@@ -1020,17 +1020,6 @@ Log::info('SectionItem:', ['found' => $sectionItem ? $sectionItem->id : 'null (f
     /**
      * Ambil semua gambar yang belum diassign ke item manapun (foto bebas).
      * Gambar bebas = inspection_item_id IS NULL di tabel inspection_images.
-     *
-     * GET /api/form-inspection/{inspectionId}/unassigned-images
-     *
-     * Response:
-     * {
-     *   "success": true,
-     *   "data": [
-     *     { "id": 1, "image_url": "http://...", "caption": null, "created_at": "..." },
-     *     ...
-     *   ]
-     * }
      */
     public function getUnassignedImages(int $inspectionId)
     {
@@ -1058,7 +1047,34 @@ Log::info('SectionItem:', ['found' => $sectionItem ? $sectionItem->id : 'null (f
         ]);
     }
 
+        /**
+     * Assign inspection_item_id ke foto bebas.
+     *
+     * PATCH /api/inspection-images/{image}/assign
+     * body: { inspection_item_id: number }
+     */
+    public function assignImages(Request $request)
+    {
+        $request->validate([
+            'inspection_item_id' => ['required','integer','exists:inspection_items,id'],
+            'image_ids' => ['required','array'],
+            'image_ids.*' => ['integer','exists:inspection_images,id']
+        ]);
 
+        $inspectionItemId = $request->inspection_item_id;
+        $imageIds = $request->image_ids;
+
+        $updated = InspectionImage::whereIn('id', $imageIds)
+            ->update([
+                'inspection_item_id' => $inspectionItemId
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Images assigned successfully',
+            'updated_count' => $updated
+        ]);
+    }
     // ─────────────────────────────────────────────────────────────
     // STATE: diisi saat proses, dipakai lintas method
     // ─────────────────────────────────────────────────────────────
