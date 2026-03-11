@@ -57,6 +57,16 @@ class FormInspectionController extends Controller
                 ], 500);
             }
 
+            $vehicleDetail = $this->vehicleApi->getVehicleDetailForInspectionForm($inspection->vehicle_id);
+
+            if (! $vehicleDetail['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $vehicleDetail['message'],
+                    'debug'   => $vehicleDetail['error'] ?? null,
+                ], 500);
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -64,9 +74,10 @@ class FormInspectionController extends Controller
                         'id' => $inspection->id,
                         'template_id' => $inspection->template_id,
                         'vehicle_id' => $inspection->vehicle_id,
+                        'vehicle_detail' => $vehicleDetail['data'] ?? null,
+                        'license_plate' => $inspection->license_plate,
                         'atribute_vehicle' => $result['data'] ?? null,
                         'vehicle_name' => $inspection->vehicle_name,
-                        'license_plate' => $inspection->license_plate,
                         'status' => $inspection->status,
                         'progress_percentage' => $inspection->progress_percentage,
                         'can_be_edited' => $inspection->canBeEdited(),
@@ -388,56 +399,6 @@ class FormInspectionController extends Controller
     }
 
     // ========================= Untuk menghandle Imga di Form Inspection=====================================
-    /**
-     * Upload Single / Multiple Images
-     */
-    // public function uploadImages(Request $request)
-    // {
-    //     $request->validate([
-    //         'inspection_id' => 'required|exists:inspections,id',
-    //         'inspection_item_id' => 'required|exists:inspection_items,id',
-    //         'images' => 'required',
-    //         'images.*' => 'image|mimes:jpg,jpeg,png|max:5120', // 5MB
-    //         'item_id' => 'nullable|required', // untuk keperluan nested required validation
-    //     ]);
-
-    //     $uploadedImages = [];
-
-    //     $files = is_array($request->file('images'))
-    //         ? $request->file('images')
-    //         : [$request->file('images')];
-
-    //     foreach ($files as $file) {
-
-    //         $fileName = Str::uuid() . '.' . $file->getClientOriginalExtension();
-
-    //         $path = $file->storeAs(
-    //             "inspection/images",
-    //             $fileName,
-    //             'public'
-    //         );
-
-    //         $image = InspectionImage::create([
-    //             'inspection_id' => $request->inspection_id,
-    //             'inspection_item_id' => $request->inspection_item_id,
-    //             'image_path' => $path,
-    //             'caption' => null,
-    //         ]);
-
-    //         $uploadedImages[] = [
-    //             'id' => $image->id,
-    //             'image_url' => $image->image_url,
-    //             'caption' => $image->caption,
-    //         ];
-    //     }
-
-    //     return response()->json([
-    //         'success' => true,
-    //         'message' => 'Image uploaded successfully',
-    //         'data' => $uploadedImages,
-    //     ]);
-    // }
-
     public function uploadImages(Request $request)
     {
         Log::info('=== UPLOAD IMAGE START ===');
@@ -1074,6 +1035,42 @@ Log::info('SectionItem:', ['found' => $sectionItem ? $sectionItem->id : 'null (f
             'message' => 'Images assigned successfully',
             'updated_count' => $updated
         ]);
+    }
+
+     /**
+     * Update vehicle detail on inspection
+     */
+    public function updateVehicle(Request $request, $inspectionId)
+    {
+        try {
+
+            $inspection = Inspection::findOrFail($inspectionId);
+
+            $validated = $request->validate([
+                'license_plate' => 'required|string|max:20',
+                'vehicle_name'  => 'required|string|max:255',
+                'vehicle_id'    => 'required|integer',
+            ]);
+
+            $inspection->update([
+                'license_plate' => $validated['license_plate'] ?? $inspection->license_plate,
+                'vehicle_name'  => $validated['vehicle_name'] ?? $inspection->vehicle_name,
+                'vehicle_id'    => $validated['vehicle_id'] ?? $inspection->vehicle_id,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Vehicle data updated successfully',
+            ]);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update vehicle data',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
     // ─────────────────────────────────────────────────────────────
     // STATE: diisi saat proses, dipakai lintas method

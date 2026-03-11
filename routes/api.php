@@ -33,10 +33,24 @@ Route::prefix('inspection')->group(function () {
         '/inspection-images/assign',
         [FormInspectionController::class, 'assignImages']
     );
+    //Untuk update vehicle info di form inspection
+    Route::put('/{inspectionId}/vehicle', [FormInspectionController::class, 'updateVehicle']);
     // Submit form with multiple items
     Route::post('/save-form', [FormInspectionController::class, 'saveForm']);
 
-
+ // Vehicle selection endpoints (proxy ke Backend A)
+    Route::prefix('vehicle-selection')->group(function () {
+        Route::get('/brands', [InspectionController::class, 'getBrands']);
+        Route::get('/models', [InspectionController::class, 'getModels']);
+        Route::get('/types', [InspectionController::class, 'getTypes']);
+        Route::get('/years', [InspectionController::class, 'getYears']);
+        Route::get('/cc', [InspectionController::class, 'getCc']);
+        Route::get('/transmissions', [InspectionController::class, 'getTransmissions']);
+        Route::get('/fuel-types', [InspectionController::class, 'getFuelTypes']);
+        Route::get('/market-periods', [InspectionController::class, 'getMarketPeriods']);
+        Route::get('/get-detail', [InspectionController::class, 'getVehicleDetail']);
+        Route::get('/search', [InspectionController::class, 'searchVehicles']);
+    });
 
 // yang bawah masih tanda tanya 
     
